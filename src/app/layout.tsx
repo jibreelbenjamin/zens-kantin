@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
 import NextTopLoader from "nextjs-toploader";
+import { Analytics } from "@vercel/analytics/next";
 import { Toaster } from "@/components/ui/sonner";
 import { RouteLoadingOverlay } from "@/components/shared/route-loading-overlay";
 import { APP_NAME } from "@/lib/constants";
@@ -64,6 +65,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <RouteLoadingOverlay />
         {children}
         <Toaster position="top-center" richColors />
+        {/* Vercel Web Analytics — hanya mengirim data kunjungan halaman
+            (tanpa cookie & tanpa identitas pengguna) dan cuma aktif kalau
+            aplikasinya di-deploy di Vercel dengan Analytics dinyalakan; di
+            lingkungan lain komponen ini tidak melakukan apa-apa. */}
+        <Analytics />
       </body>
     </html>
   );

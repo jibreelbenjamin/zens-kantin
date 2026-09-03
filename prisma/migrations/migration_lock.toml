@@ -1,0 +1,3 @@
+# Berkas ini dibuat otomatis oleh Prisma Migrate, jangan diedit manual.
+# Menentukan provider database untuk folder migrations ini.
+provider = "postgresql"

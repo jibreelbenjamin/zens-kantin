@@ -1,0 +1,284 @@
+// =====================================================================
+// Zen's Kantin — Prisma schema
+// =====================================================================
+// Dipakai HANYA sebagai alat migrasi (prisma migrate deploy) supaya
+// perubahan skema database tersusun rapi & bernomor di prisma/migrations,
+// BUKAN sebagai query layer aplikasi — aplikasi tetap memakai
+// @supabase/supabase-js (lihat src/lib/supabase/*), bukan Prisma Client,
+// karena butuh Supabase Auth/Storage/Realtime yang menyatu dengan RLS.
+//
+// Konsekuensinya: RLS policy, trigger, dan function (create_order_batch,
+// confirm_payment, get_period_stats, dst) TIDAK bisa dituliskan di sini
+// — Prisma schema DSL memang tidak punya sintaks untuk itu. Semuanya
+// didefinisikan langsung sebagai raw SQL di prisma/migrations/*/migration.sql
+// (pola yang sama juga direkomendasikan Prisma sendiri untuk project
+// yang pakai Postgres RLS, mis. Supabase).
+//
+// Kalau suatu saat mau generate Prisma Client (mis. untuk script/report
+// terpisah di luar Next.js), tinggal `npx prisma generate` — tapi kolom
+// yang GENERATED ALWAYS AS ... STORED (modal_total, harga_total,
+// harga_beli_satuan) sifatnya read-only dari sisi Prisma, jangan ditulis
+// lewat Prisma Client.
+// =====================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum UserRole {
+  admin
+  kasir
+  pelanggan
+
+  @@map("user_role")
+}
+
+enum UserStatus {
+  active
+  pending
+  block
+
+  @@map("user_status")
+}
+
+/// "tidak_dibayar" (v8) resmi dipensiunkan dari UI & API mulai v10 — TIDAK
+/// dihapus dari enum ini (drop value enum Postgres butuh bongkar ulang tipe,
+/// berisiko untuk data yang sudah ada) supaya baris pesanan LAMA yang sudah
+/// kadung berstatus itu tetap valid & tetap terhitung akurat di laporan.
+/// Tidak akan ada baris BARU dengan status ini lagi.
+enum PaymentStatus {
+  pending
+  paid
+  cancelled
+  tidak_dibayar
+
+  @@map("payment_status")
+}
+
+model Profile {
+  id        String     @id @db.Uuid
+  email     String?
+  nama      String
+  username  String     @unique
+  googleId  String?    @map("google_id")
+  role      UserRole   @default(pelanggan)
+  status    UserStatus @default(pending)
+  avatarUrl String?    @map("avatar_url")
+  createdAt DateTime   @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime   @default(now()) @map("updated_at") @db.Timestamptz
+
+  ordersDipesan     Order[]         @relation("OrderUser")
+  ordersDikonfirmasi Order[]        @relation("OrderKasir")
+  stockEntries      StockEntry[]
+  stockWriteoffs    StockWriteoff[]
+  expenses          Expense[]
+  specialIncomes    SpecialIncome[]
+  activityLogs      ActivityLog[]
+
+  @@map("profiles")
+}
+
+model AppSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz
+  updatedBy String?  @map("updated_by") @db.Uuid
+
+  @@map("app_settings")
+}
+
+/// Metode pembayaran. Kolom tampilkan_* & info_* (v9): info pembayaran
+/// opsional yang ditampilkan ke pelanggan sambil menunggu konfirmasi kasir.
+model PaymentMethod {
+  id                       String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  nama                     String
+  isActive                 Boolean  @default(true) @map("is_active")
+  tampilkanInfoPembayaran  Boolean  @default(false) @map("tampilkan_info_pembayaran")
+  tampilkanTeks            Boolean  @default(false) @map("tampilkan_teks")
+  infoTeks                 String?  @map("info_teks")
+  tampilkanGambar          Boolean  @default(false) @map("tampilkan_gambar")
+  infoGambarUrl            String?  @map("info_gambar_url")
+  createdAt                DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  orders Order[]
+
+  @@map("payment_methods")
+}
+
+model Category {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  nama      String   @unique
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  products Product[]
+
+  @@map("categories")
+}
+
+model Product {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  nama       String
+  gambarUrl  String?  @map("gambar_url")
+  stok       Int      @default(0)
+  modal      Decimal  @default(0) @db.Decimal(12, 2)
+  hargaJual  Decimal  @default(0) @map("harga_jual") @db.Decimal(12, 2)
+  isActive   Boolean  @default(true) @map("is_active")
+  kategoriId String?  @map("kategori_id") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt  DateTime @default(now()) @map("updated_at") @db.Timestamptz
+
+  kategori     Category?     @relation(fields: [kategoriId], references: [id])
+  orders       Order[]
+  stockEntries StockEntry[]
+  writeoffs    StockWriteoff[]
+
+  @@index([kategoriId])
+  @@map("products")
+}
+
+/// modalTotal & hargaTotal: GENERATED ALWAYS AS ... STORED — read-only,
+/// jangan ditulis dari Prisma Client (dihitung otomatis oleh Postgres).
+model Order {
+  id                      String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId                  String?       @map("user_id") @db.Uuid
+  namaPemesan             String        @map("nama_pemesan")
+  produkId                String?       @map("produk_id") @db.Uuid
+  namaProduk              String        @map("nama_produk")
+  qty                     Int           @default(1)
+  modalSatuan             Decimal       @default(0) @map("modal_satuan") @db.Decimal(12, 2)
+  hargaSatuan             Decimal       @default(0) @map("harga_satuan") @db.Decimal(12, 2)
+  modalTotal              Decimal       @map("modal_total") @db.Decimal(12, 2)
+  hargaTotal              Decimal       @map("harga_total") @db.Decimal(12, 2)
+  pembayaranId            String?       @map("pembayaran_id") @db.Uuid
+  namaPembayaran          String?       @map("nama_pembayaran")
+  statusPembayaran        PaymentStatus @default(pending) @map("status_pembayaran")
+  buktiBayarUrl           String?       @map("bukti_bayar_url")
+  kasirId                 String?       @map("kasir_id") @db.Uuid
+  catatan                 String?
+  groupId                 String        @default(dbgenerated("gen_random_uuid()")) @map("group_id") @db.Uuid
+  /// v10 — kasir "menyampingkan" pesanan pending yang mau dibayar belakangan,
+  /// supaya tidak tercampur di antrian. Cuma penanda tampilan, tidak
+  /// memengaruhi laporan/statistik.
+  disampingkan            Boolean       @default(false)
+  dikonfirmasiPelanggan   Boolean       @default(false) @map("dikonfirmasi_pelanggan")
+  dikonfirmasiPelangganAt DateTime?     @map("dikonfirmasi_pelanggan_at") @db.Timestamptz
+  createdAt               DateTime      @default(now()) @map("created_at") @db.Timestamptz
+  paidAt                  DateTime?     @map("paid_at") @db.Timestamptz
+
+  user      Profile?       @relation("OrderUser", fields: [userId], references: [id])
+  kasir     Profile?       @relation("OrderKasir", fields: [kasirId], references: [id])
+  produk    Product?       @relation(fields: [produkId], references: [id])
+  metode    PaymentMethod? @relation(fields: [pembayaranId], references: [id])
+
+  @@index([statusPembayaran])
+  @@index([createdAt(sort: Desc)])
+  @@index([userId])
+  @@index([groupId])
+  @@map("orders")
+}
+
+/// hargaBeliSatuan: GENERATED ALWAYS AS ROUND(total_beli/qty, 2) STORED.
+model StockEntry {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId           String?  @map("user_id") @db.Uuid
+  produkId         String?  @map("produk_id") @db.Uuid
+  namaProduk       String   @map("nama_produk")
+  totalBeli        Decimal  @default(0) @map("total_beli") @db.Decimal(12, 2)
+  qty              Int
+  hargaBeliSatuan  Decimal  @map("harga_beli_satuan") @db.Decimal(12, 2)
+  remainingQty     Int      @default(0) @map("remaining_qty")
+  gambarUrl        String?  @map("gambar_url")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user   Profile? @relation(fields: [userId], references: [id])
+  produk Product? @relation(fields: [produkId], references: [id])
+
+  @@index([createdAt(sort: Desc)])
+  @@map("stock_entries")
+}
+
+model StockWriteoff {
+  id                  String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId              String?  @map("user_id") @db.Uuid
+  produkId            String?  @map("produk_id") @db.Uuid
+  namaProduk          String   @map("nama_produk")
+  qty                 Int
+  kembalikanKerugian  Boolean  @default(false) @map("kembalikan_kerugian")
+  kerugian            Decimal  @default(0) @db.Decimal(12, 2)
+  keterangan          String?
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user   Profile? @relation(fields: [userId], references: [id])
+  produk Product? @relation(fields: [produkId], references: [id])
+
+  @@index([createdAt(sort: Desc)])
+  @@map("stock_writeoffs")
+}
+
+/// Pengeluaran Khusus (biaya operasional di luar belanja stok).
+model Expense {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId      String?  @map("user_id") @db.Uuid
+  nama        String
+  nominal     Decimal  @default(0) @db.Decimal(12, 2)
+  keterangan  String?
+  gambarUrl   String?  @map("gambar_url")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user Profile? @relation(fields: [userId], references: [id])
+
+  @@index([createdAt(sort: Desc)])
+  @@map("expenses")
+}
+
+/// Pemasukan Khusus (v9) — kebalikan Pengeluaran Khusus, menambah untung.
+model SpecialIncome {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId      String?  @map("user_id") @db.Uuid
+  nama        String
+  nominal     Decimal  @default(0) @db.Decimal(12, 2)
+  keterangan  String?
+  gambarUrl   String?  @map("gambar_url")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user Profile? @relation(fields: [userId], references: [id])
+
+  @@index([createdAt(sort: Desc)])
+  @@map("special_incomes")
+}
+
+model SavedCustomer {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  nama      String   @unique
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@map("saved_customers")
+}
+
+/// Kolom ip_address/user_agent/perangkat/kota/wilayah/negara (v9) diisi
+/// dari Route Handler lewat src/lib/activity-log.ts, bukan trigger DB.
+model ActivityLog {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId     String?  @map("user_id") @db.Uuid
+  namaUser   String?  @map("nama_user")
+  aksi       String
+  deskripsi  String?
+  ipAddress  String?  @map("ip_address")
+  userAgent  String?  @map("user_agent")
+  perangkat  String?
+  kota       String?
+  wilayah    String?
+  negara     String?
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user Profile? @relation(fields: [userId], references: [id])
+
+  @@index([createdAt(sort: Desc)])
+  @@map("activity_logs")
+}

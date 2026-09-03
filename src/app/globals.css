@@ -1,0 +1,129 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+  Zen's Kantin — token system
+  Palette: "Jade & Turmeric" — jade green (zen, calm, fresh) + warm turmeric
+  (spice, appetite) on a warm stone background. Deliberately not the generic
+  cream/terracotta AI palette.
+*/
+@layer base {
+  :root {
+    --background: 40 20% 97%;        /* warm stone white */
+    --foreground: 160 15% 12%;       /* near-black, green-tinted ink */
+
+    --card: 0 0% 100%;
+    --card-foreground: 160 15% 12%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 160 15% 12%;
+
+    --primary: 160 48% 24%;          /* deep jade */
+    --primary-foreground: 40 30% 97%;
+
+    --secondary: 40 15% 92%;
+    --secondary-foreground: 160 20% 16%;
+
+    --muted: 40 12% 92%;
+    --muted-foreground: 160 8% 42%;
+
+    --accent: 38 72% 51%;            /* warm turmeric */
+    --accent-foreground: 30 40% 12%;
+
+    --destructive: 4 72% 47%;
+    --destructive-foreground: 40 30% 97%;
+
+    --success: 152 45% 32%;
+    --success-foreground: 40 30% 97%;
+
+    --warning: 38 72% 51%;
+    --warning-foreground: 30 40% 12%;
+
+    --border: 40 14% 87%;
+    --input: 40 14% 87%;
+    --ring: 160 48% 24%;
+
+    --radius: 0.75rem;
+
+    /* Palet warna khusus chart — 6 hue yang jelas beda-beda (dipakai lewat
+       shadcn-style ChartContainer di components/ui/chart.tsx), supaya tidak
+       perlu daur ulang warna semantik (primary/accent/destructive) yang
+       makna aslinya sudah beda, sekaligus tetap selaras dgn palet "Jade &
+       Turmeric" utama. */
+    --chart-1: 160 48% 24%;   /* jade — sama dengan primary */
+    --chart-2: 38 72% 51%;    /* turmeric — sama dengan accent */
+    --chart-3: 4 72% 47%;     /* merah — sama dengan destructive */
+    --chart-4: 210 65% 48%;   /* biru */
+    --chart-5: 160 8% 55%;    /* abu-abu netral */
+    --chart-6: 280 40% 55%;   /* ungu */
+
+    /* sidebar (deep jade, used on admin/kasir shells) */
+    --sidebar: 160 42% 14%;
+    --sidebar-foreground: 40 25% 92%;
+    --sidebar-accent: 160 35% 20%;
+    --sidebar-border: 160 35% 20%;
+  }
+
+  .dark {
+    --background: 160 20% 8%;
+    --foreground: 40 20% 94%;
+    --card: 160 18% 11%;
+    --card-foreground: 40 20% 94%;
+    --popover: 160 18% 11%;
+    --popover-foreground: 40 20% 94%;
+    --primary: 152 40% 55%;
+    --primary-foreground: 160 30% 10%;
+    --secondary: 160 15% 18%;
+    --secondary-foreground: 40 20% 94%;
+    --muted: 160 15% 18%;
+    --muted-foreground: 40 10% 65%;
+    --accent: 38 72% 55%;
+    --accent-foreground: 30 40% 10%;
+    --destructive: 4 62% 50%;
+    --destructive-foreground: 40 20% 94%;
+    --success: 152 40% 45%;
+    --success-foreground: 160 30% 10%;
+    --warning: 38 72% 55%;
+    --warning-foreground: 30 40% 10%;
+    --border: 160 15% 20%;
+    --input: 160 15% 20%;
+    --ring: 152 40% 55%;
+
+    --chart-1: 152 40% 55%;
+    --chart-2: 38 72% 55%;
+    --chart-3: 4 62% 55%;
+    --chart-4: 210 65% 62%;
+    --chart-5: 40 8% 65%;
+    --chart-6: 280 45% 68%;
+
+    --sidebar: 160 25% 6%;
+    --sidebar-foreground: 40 20% 90%;
+    --sidebar-accent: 160 20% 14%;
+    --sidebar-border: 160 20% 14%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+  }
+  /* Prices / stock numbers use tabular figures so columns align in tables */
+  .tabular-figures {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}

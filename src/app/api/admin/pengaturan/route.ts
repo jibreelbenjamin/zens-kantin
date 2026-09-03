@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { requireRole } from "@/lib/supabase/require-role";
 import { logActivity } from "@/lib/activity-log";
 import { ACTIVITY_ACTIONS } from "@/lib/constants";
+import { decryptPin, encryptPin, newPinVersion } from "@/lib/pin-crypto";
 
 /** Ambil & ubah PIN kasir (dan pengaturan lain di app_settings). Admin-only. */
 export async function GET() {
@@ -9,7 +10,16 @@ export async function GET() {
     const { admin } = await requireRole(["admin"]);
     const { data, error } = await admin.from("app_settings").select("*").order("key");
     if (error) return NextResponse.json({ error: error.message }, { status: 400 });
-    return NextResponse.json({ data });
+
+    // PIN dikembalikan dalam bentuk terbaca — admin memang harus bisa
+    // melihatnya — tapi hanya lewat route ini, yang sudah dipastikan
+    // admin-only; yang tersimpan di database tetap ciphertext. Penanda
+    // versinya (kasir_pin_version) dibuang dari respons karena murni urusan
+    // internal token kunci kasir, bukan pengaturan yang bisa diubah admin.
+    const settings = (data ?? [])
+      .filter((row) => row.key !== "kasir_pin_version")
+      .map((row) => (row.key === "kasir_pin" ? { ...row, value: decryptPin(row.value) ?? "" } : row));
+    return NextResponse.json({ data: settings });
   } catch (e) {
     if (e instanceof Response) return e;
     return NextResponse.json({ error: "Terjadi kesalahan." }, { status: 500 });
@@ -29,7 +39,19 @@ export async function PATCH(request: Request) {
         return NextResponse.json({ error: "Interval harus angka bulat 1-60 menit." }, { status: 400 });
       }
     }
-    const { error } = await admin.from("app_settings").upsert({ key, value, updated_by: profile.id, updated_at: new Date().toISOString() });
+    const now = new Date().toISOString();
+    const rows = [{ key, value: key === "kasir_pin" ? encryptPin(value) : value, updated_by: profile.id, updated_at: now }];
+
+    // Setiap penyimpanan PIN ikut mengganti penanda versinya. Middleware
+    // mencocokkan penanda ini dengan yang tertanam di token kunci kasir,
+    // jadi layar kasir yang sedang terbuka dengan PIN lama langsung terkunci
+    // lagi — tanpa ini, mengganti PIN tidak berpengaruh apa pun sampai token
+    // yang lama kedaluwarsa sendiri.
+    if (key === "kasir_pin") {
+      rows.push({ key: "kasir_pin_version", value: newPinVersion(), updated_by: profile.id, updated_at: now });
+    }
+
+    const { error } = await admin.from("app_settings").upsert(rows);
     if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 
     await logActivity({

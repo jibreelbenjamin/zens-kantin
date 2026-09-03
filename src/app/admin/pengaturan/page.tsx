@@ -1,4 +1,5 @@
 import { createAdminClient } from "@/lib/supabase/server";
+import { decryptPin } from "@/lib/pin-crypto";
 import { PinSettingCard } from "./pin-setting-card";
 import { LockIntervalCard } from "./lock-interval-card";
 import { EmailReportCard } from "./email-report-card";
@@ -18,7 +19,10 @@ export default async function PengaturanPage() {
         <p className="text-sm text-muted-foreground">Kelola PIN & interval kunci layar kasir, dan pengaturan aplikasi lainnya.</p>
       </div>
 
-      <PinSettingCard currentPin={settings.kasir_pin ?? "8888"} />
+      {/* PIN tersimpan terenkripsi di database (lihat lib/pin-crypto.ts) —
+          didekripsi di sini, di server, dan hanya dikirim ke halaman admin
+          yang sudah diverifikasi role-nya oleh AdminLayout. */}
+      <PinSettingCard currentPin={decryptPin(settings.kasir_pin) ?? "8888"} />
       <LockIntervalCard currentMinutes={Number(settings.kasir_lock_interval_minutes) || 3} />
       <EmailReportCard />
     </div>

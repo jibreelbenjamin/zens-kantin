@@ -81,8 +81,8 @@ repo sekarang.
   combobox yang bisa memilih dari daftar Pelanggan Tersimpan atau
   mengetik nama baru.
 - **Kunci layar PIN** (`/kasir/lock`): halaman terpisah yang digerbangi
-  cookie HttpOnly di middleware, aktif otomatis setelah idle (interval
-  diatur admin, default 3 menit) atau lewat tombol Kunci manual.
+  token bertanda tangan di middleware, aktif otomatis setelah idle
+  (interval diatur admin, default 3 menit) atau lewat tombol Kunci manual.
 - Halaman produk khusus kasir (lihat stok & harga, tanpa akses modal
   penuh milik admin).
 
@@ -397,22 +397,45 @@ RLS diaktifkan di seluruh 12 tabel publik.
 
 ### 5.3 Kenapa `app_settings` tidak punya policy
 
-Tabel ini menyimpan PIN kasir dalam bentuk plaintext (disengaja, supaya
-admin selalu bisa melihat & mengubahnya tanpa risiko lupa). Karena RLS
-aktif tapi tidak ada satu pun policy, tidak ada role biasa yang bisa
-membacanya — baik `anon` maupun `authenticated`, termasuk kasir sendiri.
-Akses hanya lewat route server (`service_role`):
+Tabel ini menyimpan PIN kasir. Karena RLS aktif tapi tidak ada satu pun
+policy, tidak ada role biasa yang bisa membacanya — baik `anon` maupun
+`authenticated`, termasuk kasir sendiri. Akses hanya lewat route server
+(`service_role`):
 
 - Admin membaca/mengubah PIN lewat `/api/admin/pengaturan`.
 - Kasir **memverifikasi** PIN lewat `/api/kasir/verify-pin`, yang hanya
   menjawab benar/salah — nilai PIN-nya tidak pernah dikirim ke browser.
 
+Nilai PIN-nya sendiri disimpan terenkripsi (AES-256-GCM, kunci turunan
+dari `APP_SECRET` — lihat `src/lib/pin-crypto.ts`), jadi isi tabel yang
+sampai terbaca dari luar aplikasi (dump/backup database, kebocoran kunci
+Supabase, policy yang salah pasang) tidak langsung menyerahkan empat digit
+yang bisa dipakai. Admin tetap bisa melihat & mengubah PIN kapan pun,
+karena server bisa mendekripsinya. PIN lama yang masih tersimpan apa
+adanya tetap dikenali dan ikut terenkripsi begitu admin menyimpannya lagi.
+
+Satu-satunya baris `app_settings` yang bukan pengaturan admin adalah
+`kasir_pin_version`: penanda acak yang diganti setiap kali PIN disimpan,
+dibaca middleware lewat `get_kasir_pin_version()` untuk mencabut token
+kunci kasir yang terbit dengan PIN lama.
+
 ### 5.4 Lapisan di luar database
 
 - **Middleware** (`src/middleware.ts`) memeriksa sesi, status akun, mode
-  lockdown, dan cookie `kasir_unlocked` **sebelum** halaman kasir mana
+  lockdown, dan token `kasir_unlocked` **sebelum** halaman kasir mana
   pun sempat merender atau mengambil data — jadi selama PIN belum benar,
   tidak ada konten yang bisa dibongkar lewat Inspect Element.
+- **Token pembuka kunci kasir** (`src/lib/kasir-token.ts`) ditandatangani
+  HMAC-SHA256 dengan `APP_SECRET`. Cookie penanda biasa tidak cukup:
+  `HttpOnly` menghalangi JavaScript *membaca* cookie, tapi tidak
+  menghalangi siapa pun *membuatnya* lewat DevTools → Application →
+  Cookies, sehingga penanda bernilai `1` bisa dipalsukan dan seluruh
+  gerbang PIN terlewati. Token ini juga terikat ke id akun, sidik jari
+  sesi login, dan versi PIN yang berlaku, jadi tidak bisa dipindah ke
+  browser/akun lain dan otomatis mati saat admin mengganti PIN. Umurnya
+  mengikuti interval kunci dan diperpanjang middleware selama masih ada
+  request nyata dari kasir — kalau perangkatnya benar-benar ditinggal,
+  token habis sendiri tanpa bergantung pada idle timer di browser.
 - **Halaman pesan pelanggan** hanya menyeleksi kolom yang perlu, tanpa
   `modal`, supaya harga pokok tidak pernah terkirim ke browser pelanggan.
 - **Endpoint cron** (`/api/cron/*`) tidak punya sesi Supabase, jadi
@@ -459,6 +482,9 @@ SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOi...
 DATABASE_URL="postgresql://postgres:...@...:6543/postgres?pgbouncer=true"
 DIRECT_URL="postgresql://postgres:...@...:5432/postgres"
 
+# --- Rahasia aplikasi (sangat disarankan) ---
+APP_SECRET="hasil dari: openssl rand -hex 32"
+
 # --- Identitas & URL aplikasi ---
 NEXT_PUBLIC_APP_NAME="Zen's Kantin"
 APP_URL="http://localhost:3000"
@@ -480,6 +506,7 @@ CRON_SECRET="hasil dari: openssl rand -hex 32"
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Anon public key; dipakai di browser. |
 | `SUPABASE_SERVICE_ROLE_KEY` | **Jangan pernah** dipakai di kode client. Sudah diisolasi di `src/lib/supabase/server.ts`. |
 | `DATABASE_URL` / `DIRECT_URL` | Hanya untuk Prisma Migrate; tidak dipakai saat aplikasi berjalan. Semua DDL lewat `DIRECT_URL` (dideklarasikan sebagai `directUrl` di `prisma/schema.prisma`), jadi variabel itulah yang wajib memakai koneksi langsung port `5432` — transaction pooler tidak mendukung DDL. |
+| `APP_SECRET` | Kunci rahasia milik aplikasi sendiri: menandatangani token pembuka kunci layar kasir dan mengenkripsi PIN kasir di database. Kalau kosong, `SUPABASE_SERVICE_ROLE_KEY` dipakai sebagai cadangan. Menggantinya setelah PIN tersimpan membuat PIN lama tidak terbaca — cukup simpan ulang PIN sekali lewat halaman Pengaturan. |
 | `NEXT_PUBLIC_APP_NAME` | Nama/brand di seluruh UI — judul tab, halaman login/onboarding, sidebar, dan hasil ekspor laporan. |
 | `APP_URL` | URL publik tanpa slash di akhir; dipakai untuk tautan absolut di dalam email. Kalau kosong, email tetap terkirim tanpa tombol tautan. |
 | `APP_LOCKDOWN` | `true` mematikan seluruh akses aplikasi dan mengarahkan semua request ke halaman pemeliharaan. Butuh restart/redeploy agar terbaca. |
@@ -621,7 +648,8 @@ Pengaturan**.
 - **Sesi 30 hari**: cookie sesi di-set `maxAge` 30 hari di
   `src/lib/supabase/{server,middleware}.ts`. Samakan dengan Refresh Token
   Expiry di dashboard Supabase supaya konsisten sampai level server.
-- **PIN kasir plaintext**, disengaja — lihat [5.3](#53-kenapa-app_settings-tidak-punya-policy).
+- **PIN kasir terenkripsi tapi tetap bisa dilihat admin** — lihat
+  [5.3](#53-kenapa-app_settings-tidak-punya-policy).
 - **Kunci layar kasir adalah route terpisah**, bukan overlay. Overlay
   bisa dihapus lewat Inspect Element dan kontennya sudah terlanjur
   ter-render di belakangnya; dengan route terpisah + middleware, konten

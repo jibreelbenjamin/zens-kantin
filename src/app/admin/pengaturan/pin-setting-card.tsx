@@ -41,9 +41,10 @@ export function PinSettingCard({ currentPin }: { currentPin: string }) {
       <CardHeader>
         <CardTitle className="flex items-center gap-2"><KeyRound className="h-4 w-4" /> PIN Kunci Kasir</CardTitle>
         <CardDescription>
-          PIN 4 digit ini dipakai kasir untuk membuka kembali layar yang terkunci otomatis. Disimpan
-          apa adanya (tanpa enkripsi) supaya admin selalu bisa melihat & mengubahnya kapan pun tanpa
-          risiko lupa. Layar kasir akan terkunci sementara (jeda) setelah 5 kali PIN salah dalam 5 menit.
+          PIN 4 digit ini dipakai kasir untuk membuka kembali layar yang terkunci otomatis. Tersimpan
+          terenkripsi di database, tapi tetap bisa dilihat & diubah admin kapan pun di sini, jadi tidak
+          ada risiko lupa. Mengganti PIN langsung mengunci ulang semua layar kasir yang sedang terbuka.
+          Layar kasir juga terkunci sementara (jeda) setelah 5 kali PIN salah dalam 5 menit.
         </CardDescription>
       </CardHeader>
       <CardContent>

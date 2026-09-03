@@ -2,31 +2,37 @@ import { NextResponse } from "next/server";
 import { requireRole } from "@/lib/supabase/require-role";
 import { logActivity } from "@/lib/activity-log";
 import type { createAdminClient } from "@/lib/supabase/server";
+import { decryptPin, pinMatches } from "@/lib/pin-crypto";
+import { sessionFingerprint, signUnlockToken } from "@/lib/kasir-token";
 import {
   KASIR_UNLOCK_COOKIE, KASIR_IDLE_LOCK_MS, ACTIVITY_ACTIONS,
   KASIR_PIN_LOCKOUT_MAX_ATTEMPTS, KASIR_PIN_LOCKOUT_WINDOW_MINUTES,
+  unlockCookieOptions,
 } from "@/lib/constants";
 
 /**
- * Verifikasi PIN kunci layar kasir. PIN disimpan plaintext di app_settings
- * (by design — lihat catatan admin), tapi tetap tidak diekspos langsung ke
+ * Verifikasi PIN kunci layar kasir. PIN tersimpan terenkripsi di
+ * app_settings (lihat lib/pin-crypto.ts) dan tidak pernah diekspos ke
  * client: kasir hanya bisa memanggil endpoint ini dan menerima true/false.
+ * Pencocokannya pun memakai perbandingan yang lama waktunya tetap, supaya
+ * selisih waktu balasan tidak bisa dipakai menebak PIN digit per digit.
  *
- * Kalau valid, set cookie HttpOnly kasir_unlocked — inilah yang dibaca
- * middleware untuk mengizinkan akses ke halaman kasir lainnya (lihat
- * src/middleware.ts). Umurnya mengikuti interval kunci yang admin atur,
- * jadi otomatis "basi" lagi kalau memang lama tidak dipakai.
+ * Kalau valid, endpoint ini menerbitkan TOKEN bertanda tangan ke cookie
+ * HttpOnly kasir_unlocked — inilah yang diverifikasi middleware sebelum
+ * mengizinkan akses ke halaman kasir lain (lihat src/middleware.ts &
+ * lib/kasir-token.ts). Token terikat ke akun, sesi login, dan versi PIN
+ * yang berlaku, serta berumur sepanjang interval kunci yang admin atur.
  *
- * v18 — jeda percobaan gagal dipindah ke SINI (server), dihitung dari
- * baris activity_logs beraksi KASIR_PIN_GAGAL per user_id akun yang
- * SEDANG LOGIN (lihat KASIR_PIN_LOCKOUT_* di lib/constants.ts untuk
- * alasan kenapa bukan per-IP/localStorage seperti sebelumnya). PIN itu
- * sendiri TIDAK PERNAH disimpan di mana pun sisi client — cuma dipegang
- * sesaat di state React layar PIN lalu langsung dikirim ke sini.
+ * Jeda percobaan gagal dihitung di SINI (server) dari baris activity_logs
+ * beraksi KASIR_PIN_GAGAL per user_id akun yang SEDANG LOGIN (lihat
+ * KASIR_PIN_LOCKOUT_* di lib/constants.ts untuk alasan kenapa bukan
+ * per-IP/localStorage). PIN itu sendiri TIDAK PERNAH disimpan di mana pun
+ * sisi client — cuma dipegang sesaat di state React layar PIN lalu langsung
+ * dikirim ke sini.
  */
 export async function POST(request: Request) {
   try {
-    const { admin, profile } = await requireRole(["kasir", "admin"]);
+    const { admin, profile, user, supabase } = await requireRole(["kasir", "admin"]);
 
     const lockout = await checkPinLockout(admin, profile.id);
     if (lockout.locked) {
@@ -40,15 +46,16 @@ export async function POST(request: Request) {
     const { data } = await admin
       .from("app_settings")
       .select("key,value")
-      .in("key", ["kasir_pin", "kasir_lock_interval_minutes"]);
+      .in("key", ["kasir_pin", "kasir_lock_interval_minutes", "kasir_pin_version"]);
 
-    const pinValue = data?.find((d) => d.key === "kasir_pin")?.value;
+    const pinValue = decryptPin(data?.find((d) => d.key === "kasir_pin")?.value);
+    const pinVersion = data?.find((d) => d.key === "kasir_pin_version")?.value ?? "";
     const intervalMinutes = Number(data?.find((d) => d.key === "kasir_lock_interval_minutes")?.value);
     const maxAgeSeconds = Number.isFinite(intervalMinutes) && intervalMinutes > 0
       ? Math.round(intervalMinutes * 60)
       : Math.round(KASIR_IDLE_LOCK_MS / 1000);
 
-    const valid = !!pinValue && String(pin ?? "") === pinValue;
+    const valid = pinMatches(pin, pinValue);
 
     if (!valid) {
       await logActivity({
@@ -67,14 +74,17 @@ export async function POST(request: Request) {
       request,
     });
 
-    const response = NextResponse.json({ valid: true });
-    response.cookies.set(KASIR_UNLOCK_COOKIE, "1", {
-      httpOnly: true,
-      sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
-      path: "/",
-      maxAge: maxAgeSeconds,
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = await signUnlockToken({
+      u: user.id,
+      s: await sessionFingerprint(session?.access_token),
+      p: pinVersion,
+      e: Math.floor(Date.now() / 1000) + maxAgeSeconds,
+      l: maxAgeSeconds,
     });
+
+    const response = NextResponse.json({ valid: true });
+    response.cookies.set(KASIR_UNLOCK_COOKIE, token, unlockCookieOptions(maxAgeSeconds));
     return response;
   } catch (e) {
     if (e instanceof Response) return e;

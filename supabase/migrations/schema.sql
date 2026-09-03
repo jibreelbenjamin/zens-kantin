@@ -699,6 +699,22 @@ $$;
 revoke all on function get_lock_interval_minutes() from public;
 grant execute on function get_lock_interval_minutes() to authenticated;
 
+-- Versi PIN kasir: nilai acak yang diganti setiap kali admin menyimpan PIN
+-- baru (lihat /api/admin/pengaturan). Nilai ini ikut ditandatangani ke dalam
+-- token pembuka kunci layar kasir, dan dibaca ulang oleh middleware tiap
+-- request kasir — jadi begitu PIN diganti, layar kasir yang sedang terbuka
+-- dengan PIN lama langsung terkunci lagi. Sengaja function tersendiri
+-- (bukan select langsung ke app_settings) karena app_settings tidak punya
+-- policy select sama sekali: yang boleh dibaca kasir hanya penanda versi
+-- ini, tidak pernah PIN-nya.
+create or replace function get_kasir_pin_version()
+returns text
+  language sql stable security definer set search_path = public as $$
+  select coalesce((select value from app_settings where key = 'kasir_pin_version'), '');
+$$;
+revoke all on function get_kasir_pin_version() from public;
+grant execute on function get_kasir_pin_version() to authenticated;
+
 -- ---------------------------------------------------------------------
 -- 9. Laporan: statistik per periode & ringkasan bulanan
 --
@@ -982,6 +998,12 @@ end $$;
 -- ---------------------------------------------------------------------
 -- 13. Data awal
 -- ---------------------------------------------------------------------
+-- PIN awal sengaja ditulis apa adanya di sini: SQL ini tidak punya akses ke
+-- APP_SECRET aplikasi, jadi tidak bisa mengenkripsinya. Aplikasi mengenali
+-- nilai yang belum terenkripsi dan tetap menerimanya (lihat decryptPin di
+-- src/lib/pin-crypto.ts); barisnya berubah jadi ciphertext begitu admin
+-- menyimpan PIN lewat halaman Pengaturan — yang memang WAJIB dilakukan
+-- sebelum aplikasi dipakai, karena '8888' ini nilai publik.
 insert into app_settings (key, value) values ('kasir_pin', '8888')
   on conflict (key) do nothing;
 insert into app_settings (key, value) values ('kasir_lock_interval_minutes', '3')

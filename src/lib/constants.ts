@@ -21,12 +21,35 @@ export type PaymentStatusType = (typeof PAYMENT_STATUS)[number];
 // Batas idle kasir sebelum layar dikunci PIN (ms)
 export const KASIR_IDLE_LOCK_MS = 3 * 60 * 1000;
 
-// Nama cookie penanda kasir sudah memasukkan PIN dengan benar (HttpOnly,
-// diset oleh /api/kasir/verify-pin, dihapus oleh /api/kasir/lock atau
-// saat idle timeout). Umurnya mengikuti interval kunci yang admin atur
-// (lihat get_lock_interval_minutes), jadi tetap otomatis terkunci lagi
-// kalau memang tidak dipakai — bukan cuma "sekali PIN, selamanya login".
+// Cookie berisi TOKEN pembuka kunci layar kasir (HttpOnly, diset oleh
+// /api/kasir/verify-pin, dihapus oleh /api/kasir/lock atau saat idle
+// timeout). Isinya token bertanda tangan HMAC yang terikat ke akun, sesi
+// login, dan versi PIN yang berlaku — bukan penanda "1" seperti sebelumnya,
+// yang bisa dibuat sendiri siapa pun lewat DevTools > Application > Cookies
+// dan langsung melewati seluruh gerbang PIN tanpa tahu PIN-nya (lihat
+// lib/kasir-token.ts). Umurnya mengikuti interval kunci yang admin atur
+// (lihat get_lock_interval_minutes) dan diperpanjang otomatis oleh
+// middleware selama kasir masih aktif, jadi tetap terkunci sendiri kalau
+// memang ditinggal — bukan "sekali PIN, selamanya terbuka".
 export const KASIR_UNLOCK_COOKIE = "kasir_unlocked";
+
+/** Atribut cookie token unlock — dipakai saat menerbitkan & memperpanjangnya. */
+export function unlockCookieOptions(maxAgeSeconds: number) {
+  return {
+    httpOnly: true,
+    sameSite: "lax" as const,
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: maxAgeSeconds,
+  };
+}
+
+// Berapa lama middleware boleh memakai versi PIN yang sudah pernah dibaca
+// sebelum menanyakannya lagi ke database. Tanpa cache, setiap request
+// halaman kasir menambah satu query; dengan cache sependek ini, PIN yang
+// baru diganti admin tetap menendang sesi kasir yang sedang terbuka dalam
+// hitungan detik.
+export const KASIR_PIN_VERSION_CACHE_MS = 15 * 1000;
 
 // Jeda PIN kasir setelah terlalu banyak percobaan gagal — DIHITUNG SERVER-
 // SIDE dari baris activity_logs beraksi KASIR_PIN_GAGAL, per user_id akun

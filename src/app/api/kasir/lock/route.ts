@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import { requireRole } from "@/lib/supabase/require-role";
 import { logActivity } from "@/lib/activity-log";
-import { KASIR_UNLOCK_COOKIE, ACTIVITY_ACTIONS } from "@/lib/constants";
+import { KASIR_UNLOCK_COOKIE, ACTIVITY_ACTIONS, unlockCookieOptions } from "@/lib/constants";
 
-/** Mengunci layar kasir manual (atau dipanggil saat idle timeout) — hapus cookie unlock. */
+/** Mengunci layar kasir manual (atau dipanggil saat idle timeout) — hapus token unlock. */
 export async function POST(request: Request) {
   try {
     const { admin, profile } = await requireRole(["kasir", "admin"]);
@@ -14,7 +14,7 @@ export async function POST(request: Request) {
       request,
     });
     const response = NextResponse.json({ ok: true });
-    response.cookies.set(KASIR_UNLOCK_COOKIE, "", { path: "/", maxAge: 0 });
+    response.cookies.set(KASIR_UNLOCK_COOKIE, "", unlockCookieOptions(0));
     return response;
   } catch (e) {
     if (e instanceof Response) return e;

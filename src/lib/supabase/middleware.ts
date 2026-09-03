@@ -44,5 +44,12 @@ export async function updateSession(request: NextRequest) {
     profile = data;
   }
 
-  return { supabaseResponse, user, profile };
+  // Access token dikembalikan supaya middleware bisa mengikat token pembuka
+  // kunci kasir ke SESI login ini (lewat klaim session_id di dalamnya, lihat
+  // sessionFingerprint di lib/kasir-token.ts). getSession() di sini hanya
+  // membaca cookie yang sudah ada, tidak menambah request ke Supabase —
+  // keaslian penggunanya sudah diverifikasi getUser() di atas.
+  const { data: { session } } = await supabase.auth.getSession();
+
+  return { supabaseResponse, supabase, user, profile, accessToken: session?.access_token ?? null };
 }
